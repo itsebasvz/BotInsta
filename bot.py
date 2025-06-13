@@ -6,6 +6,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.action_chains import ActionChains
+
 from tkinter import Tk, simpledialog
 from tkinter import messagebox
 
@@ -168,7 +169,7 @@ story_button.click()
 print("✅ Historia abierta")
 
 # 1. Esperar a que cargue la historia
-time.sleep(3)
+delay(3,4)
 
 # 3. Intentar hacer clic en el botón de vistas en español
 try:
@@ -180,108 +181,120 @@ try:
 except Exception as e:
     print(f"❌ No se encontró el botón 'Vista por': {e}")
 
-time.sleep(150)
-
 # 2. Esperar a que aparezca al menos un usuario
 WebDriverWait(driver, 10).until(
     EC.presence_of_element_located((By.XPATH, "//a[starts-with(@href, '/') and not(contains(@href, '/stories/'))]"))
 )
-
-# 3. Intentar hacer scroll solo si hay contenedor
-try:
-    scroll_container = driver.find_element(By.XPATH, "//div[@role='presentation']//div[contains(@class, 'x1yztbdb')]")
-    last_height = driver.execute_script("return arguments[0].scrollHeight", scroll_container)
-
-    while True:
-        driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", scroll_container)
-        time.sleep(1)
-        new_height = driver.execute_script("return arguments[0].scrollHeight", scroll_container)
-        if new_height == last_height:
-            break
-        last_height = new_height
-    print("🔁 Scroll completo.")
-except NoSuchElementException:
-    print("ℹ️ No se encontró contenedor de scroll. Probablemente pocos viewers (caso válido).")
-
 delay(4,5)
-# Esperamos a que aparezca el contenedor de la lista de viewers
+
 try:
-    container = WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.XPATH, "//div[@role='dialog']"))
+    # 1️⃣ Detectar contenedor con scroll
+    scroll_container = WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.XPATH, "//div[contains(@style, 'overflow: hidden auto')]"))
     )
 
-    viewer_elements = container.find_elements(By.XPATH, ".//a[starts-with(@href, '/') and string-length(@href) > 1]")
-    
-    excluir = [
-        'edit', 'followers', 'following', 'botsitodprueba', 'saved', 'tagged',
-        'privacy', 'terms', 'locations', 'lite', '?entrypoint=web_footer',
-        'www.instagram.com', 'explore', 'reels', 'inbox'
-    ]
+    usernames_detectados = set()
+    last_scroll_top = 0
+    retries = 0
+    scroll_step = 400
 
-    usernames = []
-    for element in viewer_elements:
-        href = element.get_attribute("href")
-        if href:
-            username = href.rstrip('/').split('/')[-1]
-            if username and username not in excluir and username not in usernames:
-                usernames.append(username)
+    while retries < 5:
+        scroll_top_before = driver.execute_script("return arguments[0].scrollTop;", scroll_container)
+        scroll_height_before = driver.execute_script("return arguments[0].scrollHeight;", scroll_container)
 
-    print(f"👀 Viewers encontrados: {len(usernames)}")
-    print(usernames)
+        print(f"⬆️ Scroll actual antes del scroll: {scroll_top_before}")
+        print(f"⬇️ Scroll máximo actual (scrollHeight): {scroll_height_before}")
+
+        # Scroll hacia abajo
+        driver.execute_script(f"arguments[0].scrollTop += {scroll_step};", scroll_container)
+        delay(2.5, 3.5)
+
+        # Recolectar elementos <a> que probablemente sean usernames
+        viewer_elements = scroll_container.find_elements(By.XPATH, ".//a[starts-with(@href, '/')]")
+        nuevos_usernames = []
+
+        for el in viewer_elements:
+            href = el.get_attribute("href")
+            if href:
+                parts = href.rstrip('/').split('/')
+                if len(parts) >= 4:  # formato https://www.instagram.com/username/
+                    username = parts[3]
+                    if username and len(username) < 30 and username not in usernames_detectados:
+                        usernames_detectados.add(username)
+                        nuevos_usernames.append(username)
+
+        print(f"🧠 Nuevos usernames en esta ronda: {len(nuevos_usernames)}")
+        print(f"📈 Total usernames únicos hasta ahora: {len(usernames_detectados)}")
+        if nuevos_usernames:
+            print(f"🔍 Ejemplo de nuevos usernames: {nuevos_usernames[:5]}")
+            retries = 0
+        else:
+            retries += 1
+
+        scroll_top_after = driver.execute_script("return arguments[0].scrollTop;", scroll_container)
+        scroll_height_after = driver.execute_script("return arguments[0].scrollHeight;", scroll_container)
+
+        print(f"📏 scrollHeight después del scroll: {scroll_height_after}")
+        if scroll_top_before == scroll_top_after:
+            print("🔁 No hubo cambio en scrollTop, aumentando retry.")
+            retries += 1
+
+        print("--------------------------------------------------")
+
+    print(f"✅ Scroll terminado. Viewers totales únicos: {len(usernames_detectados)}")
+
+    # 2️⃣ VISITAR CADA PERFIL Y ENVIAR MENSAJE SI SIGUE
+    for username in usernames_detectados:
+
+        profile_url = f"https://www.instagram.com/{username}/"
+        driver.get(profile_url)
+        print(f"📄 Visitando perfil de {username}")
+        delay(3, 6)
+
+        try:
+            te_sigue = driver.find_element(By.XPATH, (
+                "//*[contains(text(), 'Siguiendo') or contains(text(), 'Follows you') or contains(text(), 'Seguir también')]"
+            ))
+            print(f"✅ {username} SÍ sigue al bot")
+
+            delay(2, 4)
+
+            mensaje_btn = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//div[text()='Mensaje']"))
+            )
+            mensaje_btn.click()
+            print("💬 Botón 'Mensaje' clickeado")
+
+            try:
+                boton_ahora_no = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[text()='Ahora no']"))
+                )
+                delay(1, 3)
+                boton_ahora_no.click()
+                print("❌ Notificación de activar notificaciones descartada con 'Ahora no'")
+            except:
+                print("ℹ️ No apareció la notificación de activar notificaciones")
+
+            delay(2, 4)
+
+            try:
+                input_box = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, "//p[@class='xat24cr xdj266r']"))
+                )
+                input_box.click()
+                delay(1, 2)
+                ActionChains(driver).send_keys(mensaje_a_enviar).send_keys(Keys.ENTER).perform()
+                print(f"📩 Mensaje enviado a {username}: {mensaje_a_enviar}")
+                delay(5, 10)
+            except Exception as e:
+                print(f"❌ No se pudo enviar el mensaje a {username}: {e}")
+
+        except:
+            print(f"⛔ {username} NO sigue al bot (o no se detectó correctamente)")
+            continue
 
 except Exception as e:
-    print(f"❌ Error al buscar viewers: {e}")
-
-
-for username in usernames:
-    profile_url = f"https://www.instagram.com/{username}/"
-    driver.get(profile_url)
-    print(f"📄 Visitando perfil de {username}")
-    delay(3, 6)
-    
-    try:
-        te_sigue = driver.find_element(By.XPATH, (
-            "//*[contains(text(), 'Siguiendo') or contains(text(), 'Follows you') or contains(text(), 'Seguir también')]"
-        ))
-        print(f"✅ {username} SÍ sigue al bot")
-
-        delay(2, 4)
-
-        mensaje_btn = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.XPATH, "//div[text()='Mensaje']"))
-        )
-        mensaje_btn.click()
-        print("💬 Botón 'Mensaje' clickeado")
-
-        try:
-            boton_ahora_no = WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[text()='Ahora no']"))
-            )
-            delay(1,3)
-            boton_ahora_no.click()
-            print("❌ Notificación de activar notificaciones descartada con 'Ahora no'")
-        except:
-            print("ℹ️ No apareció la notificación de activar notificaciones")
-        delay(2, 4)      
-                # Escribir y enviar el mensaje
-        try:
-            input_box = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, "//p[@class='xat24cr xdj266r']"))
-            )
-            # Hacer foco en el input
-            input_box.click()
-            delay(1, 2)
-            message = mensaje_a_enviar
-            ActionChains(driver).send_keys(mensaje_a_enviar).send_keys(Keys.ENTER).perform()
-            print(f"📩 Mensaje enviado a {username}: {mensaje_a_enviar}")
-            delay(5, 10)
-        except Exception as e:
-            print(f"❌ No se pudo enviar el mensaje a {username}: {e}")
-
-
-    except:
-        print(f"⛔ {username} NO sigue al bot (o no se detectó correctamente)")
-        continue
+    print(f"❌ Error durante ejecución: {e}")
 
 log_file.close()
 time.sleep(10)
