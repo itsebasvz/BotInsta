@@ -7,16 +7,30 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.action_chains import ActionChains
 
+from webdriver_manager.chrome import ChromeDriverManager
+
 from tkinter import Tk, simpledialog
 from tkinter import messagebox
 
 import tkinter as tk
-import undetected_chromedriver as uc
 import random
 import time
 import os
 import sys
 import datetime
+
+options = webdriver.ChromeOptions()
+options.add_argument("--start-maximized")
+
+# Perfil portable dentro del proyecto
+options.add_argument(r"--user-data-dir=" + os.path.join(os.getcwd(), "chrome-profile"))
+
+# Opciones adicionales para reproducir tu “modo oscuro” / look de VS Code
+options.add_argument("--disable-extensions")
+options.add_argument("--disable-popup-blocking")
+options.add_argument("--disable-infobars")
+options.add_argument("--remote-debugging-port=9222")  # opcional, útil para debugging
+options.add_argument("--force-dark-mode")  # forzar modo oscuro
 
 # Obtener la fecha y hora actual
 fecha_actual = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -46,9 +60,9 @@ sys.stderr = DualLogger(sys.stderr, log_file)
 def pedir_credenciales_y_mensaje():
     def enviar():
         nonlocal usuario, contrasena, mensaje
-        usuario = entry_usuario.get()
+        usuario = entry_usuario.get().strip()
         contrasena = entry_contrasena.get()
-        mensaje = entry_mensaje.get()
+        mensaje = entry_mensaje.get().strip()
 
         if not usuario or not contrasena or not mensaje:
             messagebox.showerror("Error", "Todos los campos son obligatorios.")
@@ -121,13 +135,33 @@ def delay(min_time=2, max_time=5):
     print(f"⏳ Esperando {round(t, 2)} segundos...")
     time.sleep(t)
 
-# Crear navegador con opciones
-options = uc.ChromeOptions()
+# Configuración del driver
+options = webdriver.ChromeOptions()
 options.add_argument("--start-maximized")
-# Puedes agregar más argumentos si lo necesitas
+# opciones opcionales (descomenta si las necesitas)
+# options.add_argument("--disable-infobars")
+# options.add_argument("--disable-extensions")
+# options.add_argument("--disable-blink-features=AutomationControlled")
 
-# Iniciar driver (ya no necesitas la ruta del ejecutable)
-driver = uc.Chrome(options=options)
+driver = None
+try:
+    # Descargar/chromedriver y crear service
+    chrome_path = ChromeDriverManager().install()
+    service = Service(chrome_path)
+
+    # Crear el webdriver con el Service
+    driver = webdriver.Chrome(service=service, options=options)
+    print("✅ Driver iniciado con webdriver-manager + selenium")
+except Exception as e:
+    print(f"❌ Error al iniciar el driver con webdriver-manager: {e}")
+    print("Intentando iniciar webdriver.Chrome() sin pasar service (fallback)...")
+    try:
+        driver = webdriver.Chrome(options=options)
+        print("✅ Driver iniciado con fallback webdriver.Chrome()")
+    except Exception as e2:
+        print(f"❌ Error al iniciar driver en fallback: {e2}")
+        log_file.close()
+        raise SystemExit("No se pudo iniciar el driver. Revisa tu instalación de Chrome/Chromedriver.")
 
 # Abrir Instagram
 driver.get("https://www.instagram.com/accounts/login/")
@@ -147,7 +181,6 @@ try:
 except TimeoutException:
     print("❌ No apareció el popup de 'Guardar info'")
 
-
 try:
     mensajes = WebDriverWait(driver, 30).until(
         EC.presence_of_element_located((By.XPATH, "//span[text()='Mensajes']"))
@@ -156,6 +189,7 @@ try:
 except TimeoutException:
     print("❌ No se detectó inicio de sesión exitoso.")
     driver.quit()
+    log_file.close()
     exit()
 
 # Ir al perfil (puedes poner el username en la URL)
@@ -299,4 +333,8 @@ except Exception as e:
 log_file.close()
 time.sleep(10)
 
-driver.quit()
+try:
+    if driver:
+        driver.quit()
+except Exception:
+    pass
